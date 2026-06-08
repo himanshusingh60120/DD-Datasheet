@@ -1,12 +1,13 @@
 {
-  "functions": {
-    "api/process.py": {
-      "maxDuration": 300,
-      "memory": 1024
-    },
-    "api/auth.py": {
-      "maxDuration": 30,
-      "memory": 512
-    }
-  }
+  "version": 2,
+  "builds": [
+    { "src": "api/*.py", "use": "@vercel/python" },
+    { "src": "public/**", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/api/process", "dest": "/api/process.py" },
+    { "src": "/api/auth", "dest": "/api/auth.py" },
+    { "src": "/", "dest": "/public/index.html" },
+    { "src": "/(.*)", "dest": "/public/$1" }
+  ]
 }
