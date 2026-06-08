@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Publications Pipeline · Kings Research</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#0e1116; --paper:#f4f0e8; --paper-2:#ece6d8;
+    --line:#1d2228; --accent:#d6442a; --accent-2:#1c5d4e;
+    --gold:#c79a3a; --mut:#5a5347;
+    --shadow:6px 6px 0 var(--ink);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:'Space Grotesk',sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    background-image:radial-gradient(var(--paper-2) 1px,transparent 1px);
+    background-size:18px 18px;
+    min-height:100vh; padding:32px 18px 80px;
+  }
+  .wrap{max-width:920px;margin:0 auto}
+  header.masthead{
+    border:3px solid var(--ink); background:var(--ink); color:var(--paper);
+    padding:26px 28px; position:relative; box-shadow:var(--shadow);
+  }
+  header.masthead .kicker{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.32em;
+    text-transform:uppercase; color:var(--gold); margin-bottom:10px;
+  }
+  header.masthead h1{
+    font-family:'Fraunces',serif; font-weight:600; font-size:clamp(28px,5vw,46px);
+    line-height:.98; letter-spacing:-.01em;
+  }
+  header.masthead h1 em{color:var(--accent);font-style:italic}
+  header.masthead .sub{
+    margin-top:10px; font-size:13px; color:#c9c2b3; max-width:560px;
+  }
+  .stamp{
+    position:absolute; top:18px; right:22px; font-family:'IBM Plex Mono',monospace;
+    font-size:10px; letter-spacing:.18em; border:1.5px solid var(--gold);
+    color:var(--gold); padding:5px 9px; transform:rotate(4deg);
+  }
+
+  .panel{
+    border:3px solid var(--ink); background:var(--paper);
+    margin-top:26px; box-shadow:var(--shadow);
+  }
+  .panel-head{
+    display:flex;align-items:center;gap:12px;
+    padding:14px 20px; border-bottom:3px solid var(--ink); background:var(--paper-2);
+  }
+  .panel-head .num{
+    font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:13px;
+    background:var(--ink); color:var(--paper); width:30px;height:30px;
+    display:grid;place-items:center;
+  }
+  .panel-head h2{
+    font-family:'Space Grotesk',sans-serif;font-weight:700;
+    font-size:15px;letter-spacing:.04em;text-transform:uppercase;
+  }
+  .panel-body{padding:22px 20px}
+
+  /* Sheet shortcut buttons */
+  .sheets{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+  a.sheet{
+    text-decoration:none;color:var(--ink);
+    border:2.5px solid var(--ink); padding:14px 16px;
+    display:flex;flex-direction:column;gap:4px;
+    background:var(--paper); transition:transform .12s,box-shadow .12s,background .12s;
+    position:relative;
+  }
+  a.sheet:hover{transform:translate(-3px,-3px);box-shadow:4px 4px 0 var(--accent-2);background:#fff}
+  a.sheet .pub{font-weight:700;font-size:15px}
+  a.sheet .meta{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--mut);letter-spacing:.08em}
+  a.sheet .arrow{position:absolute;top:12px;right:14px;font-size:16px;color:var(--accent)}
+
+  /* Form bits */
+  label.field{display:block;margin-bottom:16px}
+  label.field .lbl{
+    font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--mut);margin-bottom:6px;display:block;
+  }
+  input[type=text],input[type=number],select{
+    width:100%;font-family:'Space Grotesk',sans-serif;font-size:15px;
+    padding:11px 13px;border:2.5px solid var(--ink);background:var(--paper);
+    color:var(--ink);
+  }
+  input:focus,select:focus{outline:none;background:#fff;box-shadow:3px 3px 0 var(--gold)}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+
+  .drop{
+    border:2.5px dashed var(--ink); padding:30px 18px; text-align:center;
+    cursor:pointer; transition:background .12s; background:var(--paper);
+  }
+  .drop:hover{background:#fff}
+  .drop.armed{background:#fff;border-color:var(--accent-2)}
+  .drop .big{font-family:'Fraunces',serif;font-size:20px;margin-bottom:4px}
+  .drop .small{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mut)}
+  .drop .file{margin-top:10px;font-weight:600;color:var(--accent-2)}
+
+  .toggles{display:flex;flex-wrap:wrap;gap:18px;margin-top:6px}
+  .toggle{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500}
+  .toggle input{width:18px;height:18px;accent-color:var(--accent)}
+
+  .btn{
+    font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;
+    letter-spacing:.06em;text-transform:uppercase;cursor:pointer;
+    border:2.5px solid var(--ink);padding:13px 22px;background:var(--ink);color:var(--paper);
+    transition:transform .12s,box-shadow .12s;box-shadow:4px 4px 0 var(--accent);
+  }
+  .btn:hover:not(:disabled){transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--accent)}
+  .btn:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+  .btn.ghost{background:var(--paper);color:var(--ink);box-shadow:4px 4px 0 var(--accent-2)}
+  .btn.ghost:hover:not(:disabled){box-shadow:6px 6px 0 var(--accent-2)}
+
+  .auth-state{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--mut)}
+  .dot.on{background:var(--accent-2);box-shadow:0 0 0 4px rgba(28,93,78,.2)}
+  .who{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--mut)}
+
+  .runbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:8px}
+
+  #log{
+    font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.7;
+    background:var(--ink);color:#d7f0e4;padding:18px;margin-top:18px;
+    border:2.5px solid var(--ink);max-height:340px;overflow:auto;display:none;
+    white-space:pre-wrap;
+  }
+  #log .err{color:#ff9a8a}
+  #log .ok{color:#9af0c0}
+  #log .hd{color:var(--gold)}
+
+  footer{margin-top:30px;font-family:'IBM Plex Mono',monospace;font-size:10px;
+    color:var(--mut);text-align:center;letter-spacing:.12em}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--paper);
+    border-top-color:transparent;border-radius:50%;animation:s .7s linear infinite;vertical-align:middle}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="stamp">MONTHLY · OPS</div>
+    <div class="kicker">Kings Research · Digital Desk</div>
+    <h1>Publications <em>Pipeline</em></h1>
+    <p class="sub">Drop the monthly Excel, authorize Google, and push Active Users, Master rows &amp; Follower deltas to every publication sheet in one run.</p>
+  </header>
+
+  <!-- 1 · Quick access -->
+  <section class="panel">
+    <div class="panel-head"><span class="num">1</span><h2>Open a Publication Sheet</h2></div>
+    <div class="panel-body">
+      <div class="sheets" id="sheets"></div>
+    </div>
+  </section>
+
+  <!-- 2 · Auth -->
+  <section class="panel">
+    <div class="panel-head"><span class="num">2</span><h2>Authorize Google</h2></div>
+    <div class="panel-body">
+      <div class="auth-state">
+        <span class="dot" id="authDot"></span>
+        <span class="who" id="authWho">Not signed in</span>
+        <button class="btn ghost" id="signin" style="margin-left:auto">Sign in with Google</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · Upload + options -->
+  <section class="panel">
+    <div class="panel-head"><span class="num">3</span><h2>Attach Monthly Excel</h2></div>
+    <div class="panel-body">
+      <div class="drop" id="drop">
+        <div class="big">Drag &amp; drop the workbook</div>
+        <div class="small">.xlsx — must contain “DD Inhouse”, “DD_News”, “Daily Report”</div>
+        <div class="file" id="fileName"></div>
+      </div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls" hidden />
+
+      <div class="row" style="margin-top:20px">
+        <label class="field">
+          <span class="lbl">Month (blank = auto from filename)</span>
+          <select id="month">
+            <option value="">Auto-detect</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="lbl">Year (blank = auto)</span>
+          <input type="number" id="year" placeholder="2026" />
+        </label>
+      </div>
+
+      <div class="toggles">
+        <label class="toggle"><input type="checkbox" id="normalise" checked /> Normalise segments</label>
+        <label class="toggle"><input type="checkbox" id="dryrun" /> Dry run (no writes)</label>
+        <label class="toggle">
+          Write mode:&nbsp;
+          <select id="writemode" style="width:auto;padding:6px 8px;font-size:12px">
+            <option value="overwrite_month">Overwrite month</option>
+            <option value="append">Append</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 · Run -->
+  <section class="panel">
+    <div class="panel-head"><span class="num">4</span><h2>Run Pipeline</h2></div>
+    <div class="panel-body">
+      <div class="runbar">
+        <button class="btn" id="run" disabled>Push to Sheets ▸</button>
+        <span class="who" id="runHint">Sign in &amp; attach a file to enable.</span>
+      </div>
+      <div id="log"></div>
+    </div>
+  </section>
+
+  <footer>KINGS RESEARCH · INTERNAL TOOL · GA4 → GOOGLE SHEETS</footer>
+</div>
+
+<script>
+/* ---- CONFIG: set this to your OAuth client ID ---- */
+const GOOGLE_CLIENT_ID = "YOUR_CLIENT_ID.apps.googleusercontent.com";
+
+const SHEET_ID = {
+  MarTech360:"1X4FssrUdcjPSdeJYpRVbbEPnBTC7kCpD49-QSbZ_GEM",
+  ReadMag:"16egTzcMB6L6jGeKc6eWYkmDXrpyTiQflpU9gTscN7EE",
+  ITDigest:"1TJ8fwplZNxaPJ5f6z1E31F2VibbGoQsr2t2VMhQUg1A",
+  AITech365:"1lLbnvKYZDsBXC_F2xKOAuAWsCz-ETwOWZfOb1B0rs8I",
+};
+const PUB_META = {
+  MarTech360:"martech360.com", ITDigest:"itdigest.com",
+  AITech365:"aitech365.com", ReadMag:"readmagazine.com",
+};
+const SCOPES = [
+  "https://www.googleapis.com/auth/analytics.readonly",
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/drive.readonly",
+].join(" ");
+
+const REDIRECT_URI = window.location.origin + window.location.pathname;
+
+/* ---- Sheet buttons ---- */
+const sheetsEl = document.getElementById("sheets");
+Object.entries(SHEET_ID).forEach(([pub,id])=>{
+  const a=document.createElement("a");
+  a.className="sheet";
+  a.href=`https://docs.google.com/spreadsheets/d/${id}`;
+  a.target="_blank"; a.rel="noopener";
+  a.innerHTML=`<span class="arrow">↗</span><span class="pub">${pub}</span><span class="meta">${PUB_META[pub]}</span>`;
+  sheetsEl.appendChild(a);
+});
+
+/* ---- Month dropdown ---- */
+const monthSel=document.getElementById("month");
+["January","February","March","April","May","June","July","August","September","October","November","December"]
+  .forEach((m,i)=>{const o=document.createElement("option");o.value=i+1;o.textContent=m;monthSel.appendChild(o);});
+
+/* ---- State ---- */
+let tokens=null, fileData=null;
+const authDot=document.getElementById("authDot");
+const authWho=document.getElementById("authWho");
+const runBtn=document.getElementById("run");
+const runHint=document.getElementById("runHint");
+const logEl=document.getElementById("log");
+
+function refreshRun(){
+  const ready=tokens&&fileData;
+  runBtn.disabled=!ready;
+  runHint.textContent=ready?"Ready.":(!tokens?"Sign in to continue.":"Attach the Excel workbook.");
+}
+function setAuthed(){
+  authDot.classList.add("on");
+  authWho.textContent="Signed in · token active";
+  document.getElementById("signin").textContent="Re-authorize";
+  refreshRun();
+}
+
+/* ---- OAuth: redirect code flow ---- */
+document.getElementById("signin").onclick=()=>{
+  const p=new URLSearchParams({
+    client_id:GOOGLE_CLIENT_ID, redirect_uri:REDIRECT_URI,
+    response_type:"code", scope:SCOPES,
+    access_type:"offline", prompt:"consent",
+  });
+  window.location.href="https://accounts.google.com/o/oauth2/auth?"+p.toString();
+};
+
+/* On return, exchange ?code= for tokens via /api/auth */
+(async()=>{
+  const q=new URLSearchParams(window.location.search);
+  const code=q.get("code");
+  if(code){
+    authWho.textContent="Exchanging code…";
+    try{
+      const r=await fetch("/api/auth",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({code,redirect_uri:REDIRECT_URI}),
+      });
+      const d=await r.json();
+      if(d.error)throw new Error(d.error);
+      tokens=d;
+      sessionStorage.setItem("kr_tokens",JSON.stringify(d));
+      history.replaceState({},"",REDIRECT_URI);
+      setAuthed();
+    }catch(e){authWho.textContent="Auth failed: "+e.message;}
+  }else{
+    const saved=sessionStorage.getItem("kr_tokens");
+    if(saved){tokens=JSON.parse(saved);setAuthed();}
+  }
+})();
+
+/* ---- File upload ---- */
+const drop=document.getElementById("drop");
+const fileInput=document.getElementById("fileInput");
+const fileName=document.getElementById("fileName");
+drop.onclick=()=>fileInput.click();
+["dragover","dragenter"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("armed");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("armed");}));
+drop.addEventListener("drop",e=>{if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0]);});
+fileInput.onchange=e=>{if(e.target.files[0])handleFile(e.target.files[0]);};
+
+function handleFile(f){
+  const reader=new FileReader();
+  reader.onload=()=>{
+    fileData={name:f.name,b64:reader.result};
+    fileName.textContent="✓ "+f.name;
+    refreshRun();
+  };
+  reader.readAsDataURL(f);
+}
+
+/* ---- Log helpers ---- */
+function logLine(t,cls){
+  logEl.style.display="block";
+  const span=document.createElement("div");
+  if(cls)span.className=cls;
+  span.textContent=t;
+  logEl.appendChild(span);
+  logEl.scrollTop=logEl.scrollHeight;
+}
+
+/* ---- Run ---- */
+runBtn.onclick=async()=>{
+  if(!tokens||!fileData)return;
+  logEl.innerHTML="";logEl.style.display="block";
+  runBtn.disabled=true;
+  const orig=runBtn.innerHTML;
+  runBtn.innerHTML='<span class="spin"></span> Running…';
+  logLine("▸ Uploading workbook & calling GA4 — this can take a minute…","hd");
+
+  const payload={
+    access_token:tokens.access_token,
+    refresh_token:tokens.refresh_token||null,
+    file_b64:fileData.b64,
+    filename:fileData.name,
+    month:document.getElementById("month").value||null,
+    year:document.getElementById("year").value||null,
+    normalise_seg:document.getElementById("normalise").checked,
+    dry_run:document.getElementById("dryrun").checked,
+    write_mode:document.getElementById("writemode").value,
+  };
+
+  try{
+    const r=await fetch("/api/process",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload),
+    });
+    const d=await r.json();
+    if(!r.ok||d.error)throw new Error(d.error||("HTTP "+r.status));
+    logLine(`▸ Period: ${d.month} ${d.year}`,"hd");
+    (d.log||[]).forEach(l=>{
+      const low=l.toLowerCase();
+      logLine("  "+l, low.includes("error")||low.includes("fail")?"err":(low.includes("done")||low.includes("✅")?"ok":null));
+    });
+    logLine("✓ Finished.","ok");
+  }catch(e){
+    logLine("✗ "+e.message,"err");
+  }finally{
+    runBtn.innerHTML=orig;runBtn.disabled=false;
+  }
+};
+</script>
+</body>
+</html>
