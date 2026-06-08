@@ -1,0 +1,7 @@
+google-analytics-data
+gspread
+google-auth
+google-auth-oauthlib
+openpyxl
+pandas
+requests

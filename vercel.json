@@ -1,0 +1,12 @@
+{
+  "functions": {
+    "api/process.py": {
+      "runtime": "python3.12",
+      "maxDuration": 300,
+      "memory": 1024
+    }
+  },
+  "rewrites": [
+    { "source": "/api/process", "destination": "/api/process.py" }
+  ]
+}
