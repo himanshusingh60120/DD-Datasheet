@@ -166,6 +166,8 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
         raise ValueError("Could not detect month/year from filename — set them manually.")
     MONTH_NAME = calendar.month_name[MONTH]
     WEEK_MAP = build_week_map(YEAR, MONTH)
+    if dry_run:
+        emit("=== DRY RUN — nothing will be written to any sheet ===")
     emit(f"Detected period: {MONTH_NAME} {YEAR}")
 
     xls = io.BytesIO(xls_bytes)
@@ -246,41 +248,77 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
         emit(f"Followers skipped: {e}")
 
     # ---- GA4 fetch ----
-    def ga_active_users(property_id, start, end):
+    # activeUsers is a DEDUPLICATED metric: a user active on multiple days in a
+    # week counts once for that week. Summing per-day values inflates the count.
+    # So we run one query per week, each over that week's actual date range, and
+    # read GA4's single deduplicated activeUsers value for the range.
+
+    # Derive each week's real [start, end] dates from WEEK_MAP.
+    week_ranges = {}  # "Week N" -> (start_date, end_date)
+    for d, wk in WEEK_MAP.items():
+        if wk not in week_ranges:
+            week_ranges[wk] = [d, d]
+        else:
+            if d < week_ranges[wk][0]: week_ranges[wk][0] = d
+            if d > week_ranges[wk][1]: week_ranges[wk][1] = d
+    # ordered Week 1..Week 4
+    week_order = [w for w in ("Week 1", "Week 2", "Week 3", "Week 4") if w in week_ranges]
+
+    def ga_site_total(property_id, start, end):
+        """Single deduplicated activeUsers for the whole property over a range."""
         req = RunReportRequest(
             property=f"properties/{property_id}",
             date_ranges=[DateRange(start_date=start, end_date=end)],
-            dimensions=[Dimension(name=GA_DIMENSION), Dimension(name="date")],
+            metrics=[Metric(name=GA_METRIC)],
+        )
+        resp = ga_client.run_report(req)
+        if not resp.rows:
+            return 0.0
+        return float(resp.rows[0].metric_values[0].value or 0)
+
+    def ga_by_page(property_id, start, end):
+        """Deduplicated activeUsers per pagePath over a range (no date dim)."""
+        req = RunReportRequest(
+            property=f"properties/{property_id}",
+            date_ranges=[DateRange(start_date=start, end_date=end)],
+            dimensions=[Dimension(name=GA_DIMENSION)],
             metrics=[Metric(name=GA_METRIC)],
             limit=250000,
         )
         resp = ga_client.run_report(req)
         return [(row.dimension_values[0].value,
-                 row.dimension_values[1].value,
                  float(row.metric_values[0].value or 0)) for row in resp.rows]
-
-    def gdate_to_date(s): return dt.date(int(s[:4]), int(s[4:6]), int(s[6:8]))
-
-    ndays = calendar.monthrange(YEAR, MONTH)[1]
-    START = f"{YEAR}-{MONTH:02d}-01"
-    END   = f"{YEAR}-{MONTH:02d}-{ndays:02d}"
 
     ga_week = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     site_wide_weekly_traffic = defaultdict(lambda: defaultdict(float))
 
+    # Warn if the month hasn't fully elapsed yet (GA4 has no data for future days).
+    last_day = max(WEEK_MAP.keys())
+    yesterday = dt.date.today() - dt.timedelta(days=1)
+    if last_day > yesterday:
+        emit(f"⚠ WARNING: {MONTH_NAME} {YEAR} is not over (data only through {yesterday}). "
+             f"Later weeks will be partial or empty.")
+
     for pub, pid in GA4_PROPERTY.items():
         dom = DOMAIN[pub]
         try:
-            raw = ga_active_users(pid, START, END)
-            for path, gdate, val in raw:
-                d = gdate_to_date(gdate)
-                wk = WEEK_MAP.get(d)
-                if wk is None: continue
-                site_wide_weekly_traffic[pub][wk] += val
-                key = dom + "/na" if str(path).strip().lower() == "(not set)" else normalise_url(path, dom)
-                if key is None: continue
-                ga_week[pub][key][wk] += val
-            emit(f"GA4 {pub}: {len(raw)} pages | "
+            page_count = 0
+            for wk in week_order:
+                w_start, w_end = week_ranges[wk]
+                s = w_start.strftime("%Y-%m-%d")
+                e = w_end.strftime("%Y-%m-%d")
+
+                # 1) true deduplicated site-wide weekly total
+                site_wide_weekly_traffic[pub][wk] = ga_site_total(pid, s, e)
+
+                # 2) deduplicated per-page weekly users for MasterSheet matching
+                for path, val in ga_by_page(pid, s, e):
+                    page_count += 1
+                    key = dom + "/na" if str(path).strip().lower() == "(not set)" else normalise_url(path, dom)
+                    if key is None: continue
+                    ga_week[pub][key][wk] += val
+
+            emit(f"GA4 {pub}: {page_count} page-rows | "
                  f"W1={int(round(site_wide_weekly_traffic[pub]['Week 1']))} "
                  f"W2={int(round(site_wide_weekly_traffic[pub]['Week 2']))} "
                  f"W3={int(round(site_wide_weekly_traffic[pub]['Week 3']))} "
