@@ -71,30 +71,29 @@ def build_week_map(year, month):
 
 def active_user_weeks(year, month):
     """
-    Active-Users ONLY: exactly 4 Monday–Sunday-aligned week ranges.
-    If the 1st is not a Monday, the short leading stub is MERGED into Week 1,
-    so Week 1 spans day 1 through the end of the first FULL Mon–Sun week.
-    Weeks 2 & 3 are full 7-day blocks; Week 4 runs to month end (absorbing any
-    trailing partial week). Example May 2026 (1st = Fri):
-        W1 May 1–10, W2 May 11–17, W3 May 18–24, W4 May 25–31.
+    Active-Users week scheme: exactly 4 weeks, Monday-Sunday aligned.
+    Week 1 = day 1 through the FIRST Sunday (a short leading stub when the month
+             does not start on Monday — it is NOT merged into the next week).
+    Weeks 2 & 3 = full Mon-Sun 7-day blocks.
+    Week 4 = the remainder of the month (absorbs every day after week 3 ends,
+             including any trailing partial week).
+    Example April 2026 (1st = Wed):
+        W1 Apr 1-5, W2 Apr 6-12, W3 Apr 13-19, W4 Apr 20-30.
     Returns list of 4 (start_date, end_date) tuples.
     """
     ndays = calendar.monthrange(year, month)[1]
     first = dt.date(year, month, 1)
     last  = dt.date(year, month, ndays)
 
-    if first.weekday() == 0:                      # 1st is Monday
-        w1_end = first + dt.timedelta(days=6)     # first Sunday
-    else:                                         # stub merges into week 1
-        days_to_sunday = (6 - first.weekday()) % 7
-        stub_sunday = first + dt.timedelta(days=days_to_sunday)
-        w1_end = stub_sunday + dt.timedelta(days=7)   # + one full Mon–Sun week
-        if w1_end > last:
-            w1_end = last
+    # Week 1 ends on the first Sunday (or day 1 itself if the month starts Sunday)
+    days_to_sunday = (6 - first.weekday()) % 7
+    w1_end = first + dt.timedelta(days=days_to_sunday)
+    if w1_end > last:
+        w1_end = last
 
     bounds = [(first, w1_end)]
     cur = w1_end + dt.timedelta(days=1)
-    for _ in range(2):                            # weeks 2 and 3
+    for _ in range(2):                            # weeks 2 and 3: full Mon-Sun
         if cur > last:
             bounds.append((last, last)); continue
         wk_end = cur + dt.timedelta(days=6)
@@ -283,10 +282,11 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
         emit(f"Followers skipped: {e}")
 
     # ---- GA4 fetch ----
-    # Active Users uses its OWN week scheme (active_user_weeks): stub-merged,
-    # Monday–Sunday, always 4 weeks. activeUsers is DEDUPLICATED, so we run one
-    # query per week over that week's date range and read the single value GA4
-    # returns (summing per-day would double-count repeat visitors).
+    # Active Users uses its OWN week scheme (active_user_weeks): Week 1 is the
+    # leading stub through the first Sunday, weeks 2-3 are full Mon-Sun, week 4
+    # absorbs the remainder; always 4 weeks. activeUsers is DEDUPLICATED, so we
+    # run one query per week over that week's date range and read the single
+    # value GA4 returns (summing per-day would double-count repeat visitors).
     AU_WEEKS = active_user_weeks(YEAR, MONTH)   # [(start,end) x4]
 
     def ga_site_total(property_id, start, end):
