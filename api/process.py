@@ -187,7 +187,8 @@ def safe_int(val):
 # Core pipeline — accepts an in-memory xlsx + creds, runs everything
 # ============================================================
 def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
-                 normalise_seg=True, write_mode="overwrite_month", dry_run=False):
+                 normalise_seg=True, write_mode="overwrite_month", dry_run=False,
+                 active_user_months=None):
     log = []
     def emit(msg):
         log.append(str(msg))
@@ -386,19 +387,25 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
             if not dry_run: ws.append_rows(values, value_input_option="USER_ENTERED")
             emit(f"{pub}: MasterSheet appended.")
 
-    def write_active_users(pub):
+    def write_active_users(pub, month_name=None, weekly_totals=None):
+        """Write/update one Active-Users row: [MonthName, W1, W2, W3, W4].
+        Defaults to the run's detected MONTH_NAME / site_wide_weekly_traffic,
+        but can be called with an explicit month_name + weekly_totals dict
+        (keys 'Week 1'..'Week 4') to fill any month independently."""
+        mname = month_name or MONTH_NAME
+        totals = weekly_totals if weekly_totals is not None else site_wide_weekly_traffic[pub]
         sh = gc.open_by_key(SHEET_ID[pub])
         try: ws = sh.worksheet(TAB_ACTIVE_USERS)
         except Exception: return
-        rowvals = [MONTH_NAME] + [int(round(site_wide_weekly_traffic[pub].get(f"Week {i}", 0))) for i in [1,2,3,4]]
+        rowvals = [mname] + [int(round(totals.get(f"Week {i}", 0))) for i in [1,2,3,4]]
         data = ws.get_all_values()
-        target = next((i + 1 for i, r in enumerate(data) if r and r[0].strip().lower() == MONTH_NAME.lower()), None)
+        target = next((i + 1 for i, r in enumerate(data) if r and r[0].strip().lower() == mname.lower()), None)
         if not dry_run:
             if target:
                 ws.update(f"A{target}:E{target}", [rowvals], value_input_option="USER_ENTERED")
             else:
                 ws.append_row(rowvals, value_input_option="USER_ENTERED")
-        emit(f"{pub}: Active Users summary updated.")
+        emit(f"{pub}: Active Users summary updated for {mname}.")
 
     def write_followers(pub):
         sh = gc.open_by_key(SHEET_ID[pub])
@@ -418,13 +425,57 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
             ws.update([header] + keep_body + rows_to_write, value_input_option="USER_ENTERED")
         emit(f"{pub}: Followers wrote 4 rows for {MONTH_NAME}.")
 
+    def fetch_weekly_site_totals(pub, y, m):
+        """Return {'Week 1':v,...,'Week 4':v} of GA4 site-wide active users
+        for the given year/month, using the Active-Users week scheme."""
+        pid = GA4_PROPERTY[pub]
+        weeks = active_user_weeks(y, m)
+        totals = {}
+        for idx, (w_start, w_end) in enumerate(weeks, start=1):
+            s = w_start.strftime("%Y-%m-%d")
+            e = w_end.strftime("%Y-%m-%d")
+            try:
+                totals[f"Week {idx}"] = ga_site_total(pid, s, e)
+            except Exception as ex:
+                emit(f"GA4 error {pub} {calendar.month_name[m]} Week {idx}: {ex}")
+                totals[f"Week {idx}"] = 0.0
+        return totals
+
+    # Determine which months get an Active-Users row. If the frontend sent a
+    # list, use it (deduped, sorted in calendar order so the sheet stays
+    # sequential). Otherwise fall back to the single detected/selected month.
+    au_months = None
+    if active_user_months:
+        seen = []
+        for mm in active_user_months:
+            try: mm = int(mm)
+            except Exception: continue
+            if 1 <= mm <= 12 and mm not in seen:
+                seen.append(mm)
+        au_months = sorted(seen)
+    if not au_months:
+        au_months = [MONTH]
+
     for pub in GA4_PROPERTY:
         write_master(pub)
-        write_active_users(pub)
+        # Active Users: one row per selected month, in calendar order.
+        for mm in au_months:
+            mname = calendar.month_name[mm]
+            if mm == MONTH:
+                # already fetched above for the detected month — reuse it
+                totals = site_wide_weekly_traffic[pub]
+            else:
+                last_d = dt.date(YEAR, mm, calendar.monthrange(YEAR, mm)[1])
+                if last_d > yesterday:
+                    emit(f"⚠ {mname} {YEAR} not fully elapsed (GA4 only through {yesterday}); later weeks may be partial.")
+                totals = fetch_weekly_site_totals(pub, YEAR, mm)
+            write_active_users(pub, month_name=mname, weekly_totals=totals)
         write_followers(pub)
 
     emit("Done. All sheets updated.")
-    return {"month": MONTH_NAME, "year": YEAR, "log": log}
+    return {"month": MONTH_NAME, "year": YEAR,
+            "active_user_months": [calendar.month_name[m] for m in au_months],
+            "log": log}
 
 
 # ============================================================
@@ -482,6 +533,10 @@ class handler(BaseHTTPRequestHandler):
         except Exception:
             month, year = None, None
 
+        active_user_months = body.get("active_user_months") or None
+        if active_user_months and not isinstance(active_user_months, list):
+            active_user_months = [active_user_months]
+
         try:
             result = run_pipeline(
                 creds, xls_bytes, filename,
@@ -489,6 +544,7 @@ class handler(BaseHTTPRequestHandler):
                 normalise_seg=body.get("normalise_seg", True),
                 write_mode=body.get("write_mode", "overwrite_month"),
                 dry_run=body.get("dry_run", False),
+                active_user_months=active_user_months,
             )
             return self._send(200, {"ok": True, **result})
         except Exception as e:
