@@ -69,6 +69,42 @@ def build_week_map(year, month):
             raw[d] = 4
     return {d: f"Week {w}" for d, w in raw.items()}
 
+def active_user_weeks(year, month):
+    """
+    Active-Users ONLY: exactly 4 Monday–Sunday-aligned week ranges.
+    If the 1st is not a Monday, the short leading stub is MERGED into Week 1,
+    so Week 1 spans day 1 through the end of the first FULL Mon–Sun week.
+    Weeks 2 & 3 are full 7-day blocks; Week 4 runs to month end (absorbing any
+    trailing partial week). Example May 2026 (1st = Fri):
+        W1 May 1–10, W2 May 11–17, W3 May 18–24, W4 May 25–31.
+    Returns list of 4 (start_date, end_date) tuples.
+    """
+    ndays = calendar.monthrange(year, month)[1]
+    first = dt.date(year, month, 1)
+    last  = dt.date(year, month, ndays)
+
+    if first.weekday() == 0:                      # 1st is Monday
+        w1_end = first + dt.timedelta(days=6)     # first Sunday
+    else:                                         # stub merges into week 1
+        days_to_sunday = (6 - first.weekday()) % 7
+        stub_sunday = first + dt.timedelta(days=days_to_sunday)
+        w1_end = stub_sunday + dt.timedelta(days=7)   # + one full Mon–Sun week
+        if w1_end > last:
+            w1_end = last
+
+    bounds = [(first, w1_end)]
+    cur = w1_end + dt.timedelta(days=1)
+    for _ in range(2):                            # weeks 2 and 3
+        if cur > last:
+            bounds.append((last, last)); continue
+        wk_end = cur + dt.timedelta(days=6)
+        if wk_end > last:
+            wk_end = last
+        bounds.append((cur, wk_end))
+        cur = wk_end + dt.timedelta(days=1)
+    bounds.append((cur, last) if cur <= last else (last, last))  # week 4 = remainder
+    return bounds[:4]
+
 def normalise_url(value, domain):
     if value is None:
         return None
@@ -229,57 +265,14 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
             if li_col: daily_stats[pub][pdate]["LinkedIn"] = safe_int(r[li_col])
             if tw_col: daily_stats[pub][pdate]["Twitter"] = safe_int(r[tw_col])
             if fb_col: daily_stats[pub][pdate]["Facebook"] = safe_int(r[fb_col])
-
-        # Diagnostics: what got parsed?
-        emit(f"Daily Report cols -> LinkedIn:{li_col!r} Twitter:{tw_col!r} Facebook:{fb_col!r}")
-        for pub in GA4_PROPERTY:
-            ds = sorted(daily_stats[pub].keys())
-            mdates = [d for d in ds if d.year == YEAR and d.month == MONTH]
-            if mdates:
-                first, last = min(mdates), max(mdates)
-                emit(f"  {pub}: {len(mdates)} days in {MONTH_NAME} "
-                     f"({first} LI={daily_stats[pub][first].get('LinkedIn')} -> "
-                     f"{last} LI={daily_stats[pub][last].get('LinkedIn')})")
-            else:
-                emit(f"  {pub}: 0 days parsed for {MONTH_NAME} "
-                     f"(total dates seen: {len(ds)})")
         for pub in GA4_PROPERTY:
             pub_dates = sorted(daily_stats[pub].keys())
             if not pub_dates: continue
-
-            # Only this month's logged dates.
-            month_dates = sorted(d for d in pub_dates if d.year == YEAR and d.month == MONTH)
-            if not month_dates: continue
-
-            def nearest(target, candidates):
-                return min(candidates, key=lambda d: abs((d - target).days))
-
-            # Weeks are anchored to the FIRST logged working day of the month, then
-            # run Monday-to-Monday from there. Each Monday is both the end of one
-            # week and the start of the next (shared boundary), so deltas chain and
-            # sum to the month's total. Example (May 2026, data starts Mon May 4):
-            #   Wk1 May4->May11, Wk2 May11->May18, Wk3 May18->May25, Wk4 May25->last.
-            first = month_dates[0]
-            last  = month_dates[-1]
-            boundaries = [first]
-            cur = first
-            while len(boundaries) < 5:
-                ahead = (7 - cur.weekday()) % 7      # days to next Monday
-                ahead = 7 if ahead == 0 else ahead    # if already Monday, jump a full week
-                nxt = cur + dt.timedelta(days=ahead)
-                if nxt >= last:
-                    break
-                boundaries.append(nxt)
-                cur = nxt
-            # final boundary is the last available date; cap at 5 points = 4 weeks
-            if boundaries[-1] != last:
-                boundaries.append(last)
-            boundaries = boundaries[:5]
-
-            for i in range(len(boundaries) - 1):
-                wk_str = f"Week {i + 1}"
-                start_date = nearest(boundaries[i],     month_dates)
-                end_date   = nearest(boundaries[i + 1], month_dates)
+            for wk_num in [1, 2, 3, 4]:
+                wk_str = f"Week {wk_num}"
+                wk_dates = [d for d in pub_dates if d.year == YEAR and d.month == MONTH and WEEK_MAP.get(d) == wk_str]
+                if not wk_dates: continue
+                start_date, end_date = min(wk_dates), max(wk_dates)
                 for plat in ["LinkedIn", "Twitter", "Facebook"]:
                     start_val = daily_stats[pub][start_date].get(plat, 0)
                     end_val   = daily_stats[pub][end_date].get(plat, 0)
@@ -289,18 +282,11 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
         emit(f"Followers skipped: {e}")
 
     # ---- GA4 fetch ----
-    # activeUsers is DEDUPLICATED: a user active on several days in a week counts
-    # once for that week. Summing per-day values inflates the count. So we run one
-    # query per week over that week's real date range and read GA4's single
-    # deduplicated activeUsers for the range.
-    wk_ranges = {}
-    for d, wk in WEEK_MAP.items():
-        if wk not in wk_ranges:
-            wk_ranges[wk] = [d, d]
-        else:
-            if d < wk_ranges[wk][0]: wk_ranges[wk][0] = d
-            if d > wk_ranges[wk][1]: wk_ranges[wk][1] = d
-    wk_order = [w for w in ("Week 1", "Week 2", "Week 3", "Week 4") if w in wk_ranges]
+    # Active Users uses its OWN week scheme (active_user_weeks): stub-merged,
+    # Monday–Sunday, always 4 weeks. activeUsers is DEDUPLICATED, so we run one
+    # query per week over that week's date range and read the single value GA4
+    # returns (summing per-day would double-count repeat visitors).
+    AU_WEEKS = active_user_weeks(YEAR, MONTH)   # [(start,end) x4]
 
     def ga_site_total(property_id, start, end):
         req = RunReportRequest(
@@ -326,7 +312,7 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
     ga_week = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     site_wide_weekly_traffic = defaultdict(lambda: defaultdict(float))
 
-    last_day = max(WEEK_MAP.keys())
+    last_day = dt.date(YEAR, MONTH, calendar.monthrange(YEAR, MONTH)[1])
     yesterday = dt.date.today() - dt.timedelta(days=1)
     if last_day > yesterday:
         emit(f"⚠ {MONTH_NAME} {YEAR} not fully elapsed (GA4 data only through {yesterday}); later weeks may be partial.")
@@ -335,9 +321,10 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
         dom = DOMAIN[pub]
         try:
             page_count = 0
-            for wk in wk_order:
-                s = wk_ranges[wk][0].strftime("%Y-%m-%d")
-                e = wk_ranges[wk][1].strftime("%Y-%m-%d")
+            for idx, (w_start, w_end) in enumerate(AU_WEEKS, start=1):
+                wk = f"Week {idx}"
+                s = w_start.strftime("%Y-%m-%d")
+                e = w_end.strftime("%Y-%m-%d")
                 site_wide_weekly_traffic[pub][wk] = ga_site_total(pid, s, e)
                 for path, val in ga_by_page(pid, s, e):
                     page_count += 1
@@ -353,10 +340,20 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
             emit(f"GA4 error {pub}: {e}")
 
     # ---- Join individual links ----
+    # The row's displayed "Week" stays as-is (original calendar logic). But GA4
+    # per-link traffic is now keyed by the Active-Users week scheme, so we look up
+    # using the AU week that CONTAINS the link's publish date.
+    def au_week_for_date(d):
+        for idx, (ws_, we_) in enumerate(AU_WEEKS, start=1):
+            if ws_ <= d <= we_:
+                return f"Week {idx}"
+        return None
+
     for pub, rows in rows_by_pub.items():
         gw = ga_week.get(pub, {})
         for row in rows:
-            au = gw.get(row["url_key"], {}).get(row["week"])
+            au_wk = au_week_for_date(row["date"])
+            au = gw.get(row["url_key"], {}).get(au_wk) if au_wk else None
             row["active_users"] = int(round(au)) if (au and au > 0) else 0
 
     # ---- Writers ----
