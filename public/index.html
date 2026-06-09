@@ -103,8 +103,22 @@
   .drop .small{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mut)}
   .drop .file{margin-top:10px;font-weight:600;color:var(--accent-2)}
 
-  .toggles{display:flex;flex-wrap:wrap;gap:18px;margin-top:6px}
-  .toggle{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500}
+  /* Active Users month multi-select */
+  .months{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+  .months label{
+    display:flex;align-items:center;gap:8px;cursor:pointer;
+    border:2px solid var(--ink);padding:8px 10px;font-size:13px;font-weight:500;
+    background:var(--paper);user-select:none;transition:background .1s,box-shadow .1s;
+  }
+  .months label:hover{background:#fff}
+  .months label.on{background:#fff;box-shadow:3px 3px 0 var(--accent-2)}
+  .months input{width:16px;height:16px;accent-color:var(--accent-2)}
+  .auhint{
+    display:block;margin-top:8px;font-family:'IBM Plex Mono',monospace;
+    font-size:10px;letter-spacing:.08em;color:var(--mut);
+  }
+
+  .toggles{display:flex;flex-wrap:wrap;gap:18px;margin-top:6px}  .toggle{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500}
   .toggle input{width:18px;height:18px;accent-color:var(--accent)}
 
   .btn{
@@ -196,6 +210,12 @@
         </label>
       </div>
 
+      <div class="field" style="margin-top:4px">
+        <span class="lbl">Active Users — months to fill (multi-select)</span>
+        <div class="months" id="auMonths"></div>
+        <span class="auhint" id="auHint">None selected → uses the single month above. Year applies to all.</span>
+      </div>
+
       <div class="toggles">
         <label class="toggle"><input type="checkbox" id="normalise" checked /> Normalise segments</label>
         <label class="toggle"><input type="checkbox" id="dryrun" /> Dry run (no writes)</label>
@@ -259,9 +279,25 @@ Object.entries(SHEET_ID).forEach(([pub,id])=>{
 });
 
 /* ---- Month dropdown ---- */
+const MONTH_NAMES=["January","February","March","April","May","June","July","August","September","October","November","December"];
 const monthSel=document.getElementById("month");
-["January","February","March","April","May","June","July","August","September","October","November","December"]
-  .forEach((m,i)=>{const o=document.createElement("option");o.value=i+1;o.textContent=m;monthSel.appendChild(o);});
+MONTH_NAMES.forEach((m,i)=>{const o=document.createElement("option");o.value=i+1;o.textContent=m;monthSel.appendChild(o);});
+
+/* ---- Active Users: multi-month checkboxes ---- */
+const auMonthsEl=document.getElementById("auMonths");
+MONTH_NAMES.forEach((m,i)=>{
+  const lab=document.createElement("label");
+  const cb=document.createElement("input");
+  cb.type="checkbox"; cb.value=i+1;
+  cb.addEventListener("change",()=>lab.classList.toggle("on",cb.checked));
+  const span=document.createElement("span"); span.textContent=m;
+  lab.appendChild(cb); lab.appendChild(span);
+  auMonthsEl.appendChild(lab);
+});
+function selectedActiveMonths(){
+  return [...auMonthsEl.querySelectorAll("input:checked")]
+    .map(cb=>parseInt(cb.value,10)).sort((a,b)=>a-b);
+}
 
 /* ---- State ---- */
 let tokens=null, fileData=null;
@@ -363,6 +399,7 @@ runBtn.onclick=async()=>{
     filename:fileData.name,
     month:document.getElementById("month").value||null,
     year:document.getElementById("year").value||null,
+    active_user_months:selectedActiveMonths(),
     normalise_seg:document.getElementById("normalise").checked,
     dry_run:document.getElementById("dryrun").checked,
     write_mode:document.getElementById("writemode").value,
@@ -376,6 +413,9 @@ runBtn.onclick=async()=>{
     const d=await r.json();
     if(!r.ok||d.error)throw new Error(d.error||("HTTP "+r.status));
     logLine(`▸ Period: ${d.month} ${d.year}`,"hd");
+    if(d.active_user_months&&d.active_user_months.length){
+      logLine(`▸ Active Users filled: ${d.active_user_months.join(", ")}`,"hd");
+    }
     (d.log||[]).forEach(l=>{
       const low=l.toLowerCase();
       logLine("  "+l, low.includes("error")||low.includes("fail")?"err":(low.includes("done")||low.includes("✅")?"ok":null));
