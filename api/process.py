@@ -247,40 +247,43 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
             pub_dates = sorted(daily_stats[pub].keys())
             if not pub_dates: continue
 
-            # Real [first_day, last_day] for each week, from the week map.
-            wk_bounds = {}
-            for d, wk in WEEK_MAP.items():
-                if wk not in wk_bounds:
-                    wk_bounds[wk] = [d, d]
-                else:
-                    if d < wk_bounds[wk][0]: wk_bounds[wk][0] = d
-                    if d > wk_bounds[wk][1]: wk_bounds[wk][1] = d
-
             # Only this month's logged dates.
-            month_dates = [d for d in pub_dates if d.year == YEAR and d.month == MONTH]
+            month_dates = sorted(d for d in pub_dates if d.year == YEAR and d.month == MONTH)
             if not month_dates: continue
 
             def nearest(target, candidates):
                 return min(candidates, key=lambda d: abs((d - target).days))
 
-            # BASELINE = first day of the month (nearest logged reading to it).
-            # Each week's delta = (that week's last reading) - (previous boundary reading),
-            # chained, so Week 1 starts from day 1 of the month — never a 0.
-            base_date = nearest(min(month_dates), month_dates)  # ~ first of month
-            prev_end_date = base_date
+            # Weeks are anchored to the FIRST logged working day of the month, then
+            # run Monday-to-Monday from there. Each Monday is both the end of one
+            # week and the start of the next (shared boundary), so deltas chain and
+            # sum to the month's total. Example (May 2026, data starts Mon May 4):
+            #   Wk1 May4->May11, Wk2 May11->May18, Wk3 May18->May25, Wk4 May25->last.
+            first = month_dates[0]
+            last  = month_dates[-1]
+            boundaries = [first]
+            cur = first
+            while len(boundaries) < 5:
+                ahead = (7 - cur.weekday()) % 7      # days to next Monday
+                ahead = 7 if ahead == 0 else ahead    # if already Monday, jump a full week
+                nxt = cur + dt.timedelta(days=ahead)
+                if nxt >= last:
+                    break
+                boundaries.append(nxt)
+                cur = nxt
+            # final boundary is the last available date; cap at 5 points = 4 weeks
+            if boundaries[-1] != last:
+                boundaries.append(last)
+            boundaries = boundaries[:5]
 
-            for wk_num in [1, 2, 3, 4]:
-                wk_str = f"Week {wk_num}"
-                if wk_str not in wk_bounds: continue
-                in_week = [d for d in month_dates if WEEK_MAP.get(d) == wk_str]
-                if not in_week:
-                    continue  # delta stays 0, baseline rolls forward unchanged
-                end_date = nearest(wk_bounds[wk_str][1], in_week)
+            for i in range(len(boundaries) - 1):
+                wk_str = f"Week {i + 1}"
+                start_date = nearest(boundaries[i],     month_dates)
+                end_date   = nearest(boundaries[i + 1], month_dates)
                 for plat in ["LinkedIn", "Twitter", "Facebook"]:
-                    end_val  = daily_stats[pub][end_date].get(plat, 0)
-                    base_val = daily_stats[pub][prev_end_date].get(plat, 0)
-                    weekly_follower_gains[pub][wk_str][plat] = end_val - base_val
-                prev_end_date = end_date
+                    start_val = daily_stats[pub][start_date].get(plat, 0)
+                    end_val   = daily_stats[pub][end_date].get(plat, 0)
+                    weekly_follower_gains[pub][wk_str][plat] = end_val - start_val
         emit("Follower deltas computed.")
     except Exception as e:
         emit(f"Followers skipped: {e}")
