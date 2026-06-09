@@ -166,8 +166,6 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
         raise ValueError("Could not detect month/year from filename — set them manually.")
     MONTH_NAME = calendar.month_name[MONTH]
     WEEK_MAP = build_week_map(YEAR, MONTH)
-    if dry_run:
-        emit("=== DRY RUN — nothing will be written to any sheet ===")
     emit(f"Detected period: {MONTH_NAME} {YEAR}")
 
     xls = io.BytesIO(xls_bytes)
@@ -234,91 +232,95 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
         for pub in GA4_PROPERTY:
             pub_dates = sorted(daily_stats[pub].keys())
             if not pub_dates: continue
+
+            # True [start, end] boundary date for each week, from the week map.
+            wk_bounds = {}  # "Week N" -> [first_day, last_day]
+            for d, wk in WEEK_MAP.items():
+                if wk not in wk_bounds:
+                    wk_bounds[wk] = [d, d]
+                else:
+                    if d < wk_bounds[wk][0]: wk_bounds[wk][0] = d
+                    if d > wk_bounds[wk][1]: wk_bounds[wk][1] = d
+
+            def nearest(target, candidates):
+                return min(candidates, key=lambda d: abs((d - target).days))
+
+            # CARRY-OVER model:
+            #   each week's delta = (this week's last reading) - (previous week's last reading)
+            #   Week 1's baseline  = last logged reading BEFORE this month begins
+            #                        (i.e. how the previous month ended).
+            # This chains continuously so Week 1 is never a within-week 0.
+            month_start = min(wk_bounds[w][0] for w in wk_bounds)
+            prior_dates = [d for d in pub_dates if d < month_start]
+            prev_end_date = prior_dates[-1] if prior_dates else None  # baseline for Week 1
+
             for wk_num in [1, 2, 3, 4]:
                 wk_str = f"Week {wk_num}"
-                wk_dates = [d for d in pub_dates if d.year == YEAR and d.month == MONTH and WEEK_MAP.get(d) == wk_str]
-                if not wk_dates: continue
-                start_date, end_date = min(wk_dates), max(wk_dates)
+                if wk_str not in wk_bounds: continue
+                bound_end = wk_bounds[wk_str][1]
+
+                in_week = [d for d in pub_dates
+                           if d.year == YEAR and d.month == MONTH and WEEK_MAP.get(d) == wk_str]
+                if not in_week:
+                    # no readings this week: delta is 0, and the baseline rolls forward unchanged
+                    continue
+
+                # this week's "end" = reading nearest the week's last day
+                end_date = nearest(bound_end, in_week)
+
                 for plat in ["LinkedIn", "Twitter", "Facebook"]:
-                    start_val = daily_stats[pub][start_date].get(plat, 0)
-                    end_val   = daily_stats[pub][end_date].get(plat, 0)
-                    weekly_follower_gains[pub][wk_str][plat] = end_val - start_val
+                    end_val = daily_stats[pub][end_date].get(plat, 0)
+                    if prev_end_date is not None:
+                        base_val = daily_stats[pub][prev_end_date].get(plat, 0)
+                    else:
+                        # no prior reading at all (first month of data):
+                        # fall back to this week's first reading so delta is within-week
+                        first_in_week = nearest(wk_bounds[wk_str][0], in_week)
+                        base_val = daily_stats[pub][first_in_week].get(plat, 0)
+                    weekly_follower_gains[pub][wk_str][plat] = end_val - base_val
+
+                # roll the baseline forward to this week's end for the next week
+                prev_end_date = end_date
         emit("Follower deltas computed.")
     except Exception as e:
         emit(f"Followers skipped: {e}")
 
     # ---- GA4 fetch ----
-    # activeUsers is a DEDUPLICATED metric: a user active on multiple days in a
-    # week counts once for that week. Summing per-day values inflates the count.
-    # So we run one query per week, each over that week's actual date range, and
-    # read GA4's single deduplicated activeUsers value for the range.
-
-    # Derive each week's real [start, end] dates from WEEK_MAP.
-    week_ranges = {}  # "Week N" -> (start_date, end_date)
-    for d, wk in WEEK_MAP.items():
-        if wk not in week_ranges:
-            week_ranges[wk] = [d, d]
-        else:
-            if d < week_ranges[wk][0]: week_ranges[wk][0] = d
-            if d > week_ranges[wk][1]: week_ranges[wk][1] = d
-    # ordered Week 1..Week 4
-    week_order = [w for w in ("Week 1", "Week 2", "Week 3", "Week 4") if w in week_ranges]
-
-    def ga_site_total(property_id, start, end):
-        """Single deduplicated activeUsers for the whole property over a range."""
+    def ga_active_users(property_id, start, end):
         req = RunReportRequest(
             property=f"properties/{property_id}",
             date_ranges=[DateRange(start_date=start, end_date=end)],
-            metrics=[Metric(name=GA_METRIC)],
-        )
-        resp = ga_client.run_report(req)
-        if not resp.rows:
-            return 0.0
-        return float(resp.rows[0].metric_values[0].value or 0)
-
-    def ga_by_page(property_id, start, end):
-        """Deduplicated activeUsers per pagePath over a range (no date dim)."""
-        req = RunReportRequest(
-            property=f"properties/{property_id}",
-            date_ranges=[DateRange(start_date=start, end_date=end)],
-            dimensions=[Dimension(name=GA_DIMENSION)],
+            dimensions=[Dimension(name=GA_DIMENSION), Dimension(name="date")],
             metrics=[Metric(name=GA_METRIC)],
             limit=250000,
         )
         resp = ga_client.run_report(req)
         return [(row.dimension_values[0].value,
+                 row.dimension_values[1].value,
                  float(row.metric_values[0].value or 0)) for row in resp.rows]
+
+    def gdate_to_date(s): return dt.date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+
+    ndays = calendar.monthrange(YEAR, MONTH)[1]
+    START = f"{YEAR}-{MONTH:02d}-01"
+    END   = f"{YEAR}-{MONTH:02d}-{ndays:02d}"
 
     ga_week = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     site_wide_weekly_traffic = defaultdict(lambda: defaultdict(float))
 
-    # Warn if the month hasn't fully elapsed yet (GA4 has no data for future days).
-    last_day = max(WEEK_MAP.keys())
-    yesterday = dt.date.today() - dt.timedelta(days=1)
-    if last_day > yesterday:
-        emit(f"⚠ WARNING: {MONTH_NAME} {YEAR} is not over (data only through {yesterday}). "
-             f"Later weeks will be partial or empty.")
-
     for pub, pid in GA4_PROPERTY.items():
         dom = DOMAIN[pub]
         try:
-            page_count = 0
-            for wk in week_order:
-                w_start, w_end = week_ranges[wk]
-                s = w_start.strftime("%Y-%m-%d")
-                e = w_end.strftime("%Y-%m-%d")
-
-                # 1) true deduplicated site-wide weekly total
-                site_wide_weekly_traffic[pub][wk] = ga_site_total(pid, s, e)
-
-                # 2) deduplicated per-page weekly users for MasterSheet matching
-                for path, val in ga_by_page(pid, s, e):
-                    page_count += 1
-                    key = dom + "/na" if str(path).strip().lower() == "(not set)" else normalise_url(path, dom)
-                    if key is None: continue
-                    ga_week[pub][key][wk] += val
-
-            emit(f"GA4 {pub}: {page_count} page-rows | "
+            raw = ga_active_users(pid, START, END)
+            for path, gdate, val in raw:
+                d = gdate_to_date(gdate)
+                wk = WEEK_MAP.get(d)
+                if wk is None: continue
+                site_wide_weekly_traffic[pub][wk] += val
+                key = dom + "/na" if str(path).strip().lower() == "(not set)" else normalise_url(path, dom)
+                if key is None: continue
+                ga_week[pub][key][wk] += val
+            emit(f"GA4 {pub}: {len(raw)} pages | "
                  f"W1={int(round(site_wide_weekly_traffic[pub]['Week 1']))} "
                  f"W2={int(round(site_wide_weekly_traffic[pub]['Week 2']))} "
                  f"W3={int(round(site_wide_weekly_traffic[pub]['Week 3']))} "
