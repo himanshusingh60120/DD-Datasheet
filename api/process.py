@@ -229,12 +229,26 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
             if li_col: daily_stats[pub][pdate]["LinkedIn"] = safe_int(r[li_col])
             if tw_col: daily_stats[pub][pdate]["Twitter"] = safe_int(r[tw_col])
             if fb_col: daily_stats[pub][pdate]["Facebook"] = safe_int(r[fb_col])
+
+        # Diagnostics: what got parsed?
+        emit(f"Daily Report cols -> LinkedIn:{li_col!r} Twitter:{tw_col!r} Facebook:{fb_col!r}")
+        for pub in GA4_PROPERTY:
+            ds = sorted(daily_stats[pub].keys())
+            mdates = [d for d in ds if d.year == YEAR and d.month == MONTH]
+            if mdates:
+                first, last = min(mdates), max(mdates)
+                emit(f"  {pub}: {len(mdates)} days in {MONTH_NAME} "
+                     f"({first} LI={daily_stats[pub][first].get('LinkedIn')} -> "
+                     f"{last} LI={daily_stats[pub][last].get('LinkedIn')})")
+            else:
+                emit(f"  {pub}: 0 days parsed for {MONTH_NAME} "
+                     f"(total dates seen: {len(ds)})")
         for pub in GA4_PROPERTY:
             pub_dates = sorted(daily_stats[pub].keys())
             if not pub_dates: continue
 
-            # True [start, end] boundary date for each week, from the week map.
-            wk_bounds = {}  # "Week N" -> [first_day, last_day]
+            # Real [first_day, last_day] for each week, from the week map.
+            wk_bounds = {}
             for d, wk in WEEK_MAP.items():
                 if wk not in wk_bounds:
                     wk_bounds[wk] = [d, d]
@@ -242,44 +256,30 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
                     if d < wk_bounds[wk][0]: wk_bounds[wk][0] = d
                     if d > wk_bounds[wk][1]: wk_bounds[wk][1] = d
 
+            # Only this month's logged dates.
+            month_dates = [d for d in pub_dates if d.year == YEAR and d.month == MONTH]
+            if not month_dates: continue
+
             def nearest(target, candidates):
                 return min(candidates, key=lambda d: abs((d - target).days))
 
-            # CARRY-OVER model:
-            #   each week's delta = (this week's last reading) - (previous week's last reading)
-            #   Week 1's baseline  = last logged reading BEFORE this month begins
-            #                        (i.e. how the previous month ended).
-            # This chains continuously so Week 1 is never a within-week 0.
-            month_start = min(wk_bounds[w][0] for w in wk_bounds)
-            prior_dates = [d for d in pub_dates if d < month_start]
-            prev_end_date = prior_dates[-1] if prior_dates else None  # baseline for Week 1
+            # BASELINE = first day of the month (nearest logged reading to it).
+            # Each week's delta = (that week's last reading) - (previous boundary reading),
+            # chained, so Week 1 starts from day 1 of the month — never a 0.
+            base_date = nearest(min(month_dates), month_dates)  # ~ first of month
+            prev_end_date = base_date
 
             for wk_num in [1, 2, 3, 4]:
                 wk_str = f"Week {wk_num}"
                 if wk_str not in wk_bounds: continue
-                bound_end = wk_bounds[wk_str][1]
-
-                in_week = [d for d in pub_dates
-                           if d.year == YEAR and d.month == MONTH and WEEK_MAP.get(d) == wk_str]
+                in_week = [d for d in month_dates if WEEK_MAP.get(d) == wk_str]
                 if not in_week:
-                    # no readings this week: delta is 0, and the baseline rolls forward unchanged
-                    continue
-
-                # this week's "end" = reading nearest the week's last day
-                end_date = nearest(bound_end, in_week)
-
+                    continue  # delta stays 0, baseline rolls forward unchanged
+                end_date = nearest(wk_bounds[wk_str][1], in_week)
                 for plat in ["LinkedIn", "Twitter", "Facebook"]:
-                    end_val = daily_stats[pub][end_date].get(plat, 0)
-                    if prev_end_date is not None:
-                        base_val = daily_stats[pub][prev_end_date].get(plat, 0)
-                    else:
-                        # no prior reading at all (first month of data):
-                        # fall back to this week's first reading so delta is within-week
-                        first_in_week = nearest(wk_bounds[wk_str][0], in_week)
-                        base_val = daily_stats[pub][first_in_week].get(plat, 0)
+                    end_val  = daily_stats[pub][end_date].get(plat, 0)
+                    base_val = daily_stats[pub][prev_end_date].get(plat, 0)
                     weekly_follower_gains[pub][wk_str][plat] = end_val - base_val
-
-                # roll the baseline forward to this week's end for the next week
                 prev_end_date = end_date
         emit("Follower deltas computed.")
     except Exception as e:
