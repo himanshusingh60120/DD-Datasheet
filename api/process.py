@@ -69,6 +69,21 @@ def build_week_map(year, month):
             raw[d] = 4
     return {d: f"Week {w}" for d, w in raw.items()}
 
+def most_recent_completed_year(month, today=None):
+    """Active-Users helper. Return the year of the most recent occurrence of
+    `month` whose final day is strictly before `today` (i.e. fully elapsed).
+    Walks backward from the current year so e.g. on 2026-06-10:
+        May -> 2026, November -> 2025, June -> 2025 (June 2026 not finished yet).
+    """
+    today = today or dt.date.today()
+    y = today.year
+    for _ in range(4):
+        last_day = dt.date(y, month, calendar.monthrange(y, month)[1])
+        if last_day < today:
+            return y
+        y -= 1
+    return today.year - 1
+
 def active_user_weeks(year, month):
     """
     Active-Users week scheme: exactly 4 weeks, Monday-Sunday aligned.
@@ -431,14 +446,22 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
         pid = GA4_PROPERTY[pub]
         weeks = active_user_weeks(y, m)
         totals = {}
+        errored = False
         for idx, (w_start, w_end) in enumerate(weeks, start=1):
             s = w_start.strftime("%Y-%m-%d")
             e = w_end.strftime("%Y-%m-%d")
             try:
                 totals[f"Week {idx}"] = ga_site_total(pid, s, e)
             except Exception as ex:
-                emit(f"GA4 error {pub} {calendar.month_name[m]} Week {idx}: {ex}")
+                errored = True
+                emit(f"GA4 ERROR {pub} {calendar.month_name[m]} {y} Week {idx} ({s}..{e}): {ex}")
                 totals[f"Week {idx}"] = 0.0
+        emit(f"GA4 {pub} {calendar.month_name[m]} {y}: "
+             f"W1={int(round(totals.get('Week 1',0)))} "
+             f"W2={int(round(totals.get('Week 2',0)))} "
+             f"W3={int(round(totals.get('Week 3',0)))} "
+             f"W4={int(round(totals.get('Week 4',0)))}"
+             + (" [had errors]" if errored else ""))
         return totals
 
     # Determine which months get an Active-Users row. If the frontend sent a
@@ -459,16 +482,20 @@ def run_pipeline(creds, xls_bytes, xls_filename, year=None, month=None,
     for pub in GA4_PROPERTY:
         write_master(pub)
         # Active Users: one row per selected month, in calendar order.
+        # Each month resolves to its own most-recent fully-finished year, so a
+        # selection spanning a year boundary (e.g. Nov/Dec -> 2025, Jan-May ->
+        # 2026) fetches the correct range per month instead of forcing one year.
         for mm in au_months:
             mname = calendar.month_name[mm]
-            if mm == MONTH:
-                # already fetched above for the detected month — reuse it
+            if mm == MONTH and YEAR == most_recent_completed_year(MONTH):
+                # the uploaded/detected month is the recent one — reuse its fetch
                 totals = site_wide_weekly_traffic[pub]
             else:
-                last_d = dt.date(YEAR, mm, calendar.monthrange(YEAR, mm)[1])
+                yy = YEAR if mm == MONTH else most_recent_completed_year(mm)
+                last_d = dt.date(yy, mm, calendar.monthrange(yy, mm)[1])
                 if last_d > yesterday:
-                    emit(f"⚠ {mname} {YEAR} not fully elapsed (GA4 only through {yesterday}); later weeks may be partial.")
-                totals = fetch_weekly_site_totals(pub, YEAR, mm)
+                    emit(f"⚠ {mname} {yy} not fully elapsed (GA4 only through {yesterday}); later weeks may be partial.")
+                totals = fetch_weekly_site_totals(pub, yy, mm)
             write_active_users(pub, month_name=mname, weekly_totals=totals)
         write_followers(pub)
 
